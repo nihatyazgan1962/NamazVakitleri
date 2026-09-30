@@ -1,0 +1,17 @@
+﻿node_modules/
+.jdk/
+.jdk21/
+jdk/
+cmdline-tools/
+.transforms/
+.cxx/
+.gradle/
+build/
+dist/
+.dart_tool/
+__pycache__/
+*.apk
+*.aab
+*.zip
+android/app/build/
+ios/Pods/
