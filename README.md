@@ -68,5 +68,6 @@ npx cap open android
 
 ## 👨‍💻 Geliştirici
 
-**Nihat Yazgan** — Yazgan Bilişim  
+**Yazgan Bilişim**  
+E-posta: yazganbilisim2026@gmail.com
 GitHub: [@nihatyazgan1962](https://github.com/nihatyazgan1962)
