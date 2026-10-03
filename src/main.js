@@ -190,7 +190,7 @@ async function refreshCustomAudios() {
 }
 
 /**
- * Vakitleri yerel veritabanından getir veya hesaplayıp senkronize et
+ * Vakitleri yerel veritabanından getir veya hesaplayıp Diyanet resmi sayfasından senkronize et
  */
 async function updatePrayerTimes() {
   const city = state.currentCity;
@@ -201,8 +201,8 @@ async function updatePrayerTimes() {
   state.countdown = getNextPrayerCountdown(state.prayerData.times.raw);
   state.monthlyTimes = generateMonthlyPrayerTimes(city.latitude, city.longitude);
 
-  // Arka planda resmi Diyanet API'sinden kontrol et (varsa)
-  fetchOnlineDiyanetTimes(city.cityName || city.name).then(onlineTimes => {
+  // Arka planda resmi Diyanet İşleri Başkanlığı sayfasından (namazvakitleri.diyanet.gov.tr) çek
+  fetchOnlineDiyanetTimes(city).then(onlineTimes => {
     if (onlineTimes && state.prayerData) {
       state.prayerData.times.fajr = onlineTimes.fajr || state.prayerData.times.fajr;
       state.prayerData.times.sunrise = onlineTimes.sunrise || state.prayerData.times.sunrise;
@@ -210,6 +210,45 @@ async function updatePrayerTimes() {
       state.prayerData.times.asr = onlineTimes.asr || state.prayerData.times.asr;
       state.prayerData.times.maghrib = onlineTimes.maghrib || state.prayerData.times.maghrib;
       state.prayerData.times.isha = onlineTimes.isha || state.prayerData.times.isha;
+
+      // Sayaç için raw Date nesnelerini Diyanet saatlerine göre kalibre et
+      const makeDate = (timeStr) => {
+        if (!timeStr) return new Date();
+        const [h, m] = timeStr.split(':').map(Number);
+        const d = new Date();
+        d.setHours(h, m, 0, 0);
+        return d;
+      };
+
+      state.prayerData.times.raw.fajr = makeDate(state.prayerData.times.fajr);
+      state.prayerData.times.sunrise = makeDate(state.prayerData.times.sunrise);
+      state.prayerData.times.dhuhr = makeDate(state.prayerData.times.dhuhr);
+      state.prayerData.times.asr = makeDate(state.prayerData.times.asr);
+      state.prayerData.times.maghrib = makeDate(state.prayerData.times.maghrib);
+      state.prayerData.times.isha = makeDate(state.prayerData.times.isha);
+
+      if (onlineTimes.hijri) {
+        state.diyanetHijri = onlineTimes.hijri;
+      }
+      if (onlineTimes.qiblaAngle) {
+        state.qiblaAngle = onlineTimes.qiblaAngle;
+      }
+      if (onlineTimes.monthlyList && onlineTimes.monthlyList.length > 0) {
+        state.monthlyTimes = onlineTimes.monthlyList.map(item => ({
+          date: item.gregorianDate,
+          hijriDate: item.hijriDate,
+          times: {
+            fajr: item.fajr,
+            sunrise: item.sunrise,
+            dhuhr: item.dhuhr,
+            asr: item.asr,
+            maghrib: item.maghrib,
+            isha: item.isha
+          }
+        }));
+      }
+
+      state.countdown = getNextPrayerCountdown(state.prayerData.times.raw);
       renderApp();
     }
   }).catch(() => {});
@@ -414,7 +453,8 @@ function renderHomeTab() {
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
         <div class="date-hijri-badge">
           <span class="gregorian-date-badge">📅 ${gregorianDateStr}</span>
-          <span class="hijri-badge">1447 Hicri</span>
+          <span class="hijri-badge">${state.diyanetHijri || '1448 Hicri'}</span>
+          <span style="font-size:0.65rem; color:#34d399; background:rgba(16,185,129,0.15); padding:2px 6px; border-radius:10px; border:1px solid rgba(16,185,129,0.3); font-weight:600;">✓ Diyanet</span>
         </div>
         <button class="desk-mode-trigger-btn" id="open-desk-stand-btn" title="Tam Ekran Masa Saati Modu">
           <span>🖥️</span> Masa Saati

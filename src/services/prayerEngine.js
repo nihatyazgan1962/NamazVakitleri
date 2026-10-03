@@ -77,9 +77,122 @@ export function generateMonthlyPrayerTimes(latitude, longitude, startDate = new 
 }
 
 /**
- * İnternet varsa Aladhan Resmi Diyanet API'sinden güncel resmi vakitleri senkronize etmeyi dener
+ * Diyanet.gov.tr resmi sayfasından dönen HTML içeriğini ayrıştırır.
+ * (Örn: https://namazvakitleri.diyanet.gov.tr/tr-TR/9541/istanbul-icin-namaz-vakti)
  */
-export async function fetchOnlineDiyanetTimes(cityName) {
+export function parseDiyanetHtml(html) {
+  if (!html || typeof html !== 'string') return null;
+
+  const getVal = (name) => {
+    const idx = html.indexOf('data-vakit-name="' + name + '"');
+    if (idx === -1) return null;
+    const sub = html.substring(idx, idx + 250);
+    const m = sub.match(/<div class="tpt-time"[^>]*>([^<]+)<\/div>/);
+    return m ? m[1].trim() : null;
+  };
+
+  const fajr = getVal('imsak');
+  const sunrise = getVal('gunes');
+  const dhuhr = getVal('ogle');
+  const asr = getVal('ikindi');
+  const maghrib = getVal('aksam');
+  const isha = getVal('yatsı') || getVal('yatsi');
+
+  if (!fajr || !dhuhr || !maghrib) return null;
+
+  const hicriMatch = html.match(/<div class="ti-hicri">([^<]+)<\/div>/i);
+  const kibleAciMatch = html.match(/Kıble A&#231;ısı[\s\S]*?<div class="tpt-time">([^<]+)<\/div>/i);
+  const kibleZamanMatch = html.match(/Kıble Zamanı[\s\S]*?<div class="tpt-time">([^<]+)<\/div>/i);
+
+  // Aylık / Yıllık Tabloyu Ayrıştır
+  const monthlyList = [];
+  const tableMatches = html.match(/<table class="table vakit-table"[\s\S]*?<tbody>([\s\S]*?)<\/tbody>/gi);
+  if (tableMatches) {
+    tableMatches.forEach(tbl => {
+      const trRegex = /<tr>([\s\S]*?)<\/tr>/gi;
+      let trMatch;
+      while ((trMatch = trRegex.exec(tbl)) !== null) {
+        const tdRegex = /<td>([^<]*)<\/td>/gi;
+        const tds = [];
+        let tdMatch;
+        while ((tdMatch = tdRegex.exec(trMatch[1])) !== null) {
+          tds.push(tdMatch[1].trim());
+        }
+        if (tds.length >= 8) {
+          monthlyList.push({
+            gregorianDate: tds[0],
+            hijriDate: tds[1],
+            fajr: tds[2],
+            sunrise: tds[3],
+            dhuhr: tds[4],
+            asr: tds[5],
+            maghrib: tds[6],
+            isha: tds[7]
+          });
+        }
+      }
+    });
+  }
+
+  return {
+    source: 'namazvakitleri.diyanet.gov.tr',
+    fajr,
+    sunrise,
+    dhuhr,
+    asr,
+    maghrib,
+    isha,
+    hijri: hicriMatch ? hicriMatch[1].trim() : null,
+    qiblaAngle: kibleAciMatch ? parseInt(kibleAciMatch[1].trim(), 10) : 147,
+    qiblaTime: kibleZamanMatch ? kibleZamanMatch[1].trim() : null,
+    monthlyList
+  };
+}
+
+/**
+ * Resmi Diyanet İşleri Başkanlığı Sitesinden (namazvakitleri.diyanet.gov.tr) Vakitleri Çeker
+ */
+export async function fetchOnlineDiyanetTimes(cityOrName) {
+  let diyanetId = 9541; // Varsayılan İstanbul
+  let slug = 'istanbul-icin-namaz-vakti';
+  let cityName = 'İstanbul';
+
+  if (typeof cityOrName === 'object' && cityOrName !== null) {
+    cityName = cityOrName.cityName || cityOrName.name || 'İstanbul';
+    if (cityOrName.diyanetId) diyanetId = cityOrName.diyanetId;
+    if (cityOrName.diyanetSlug) slug = cityOrName.diyanetSlug;
+  } else if (typeof cityOrName === 'string') {
+    cityName = cityOrName;
+  }
+
+  const targetUrl = `https://namazvakitleri.diyanet.gov.tr/tr-TR/${diyanetId}/${slug}`;
+
+  // 1. Doğrudan veya Proxy ile Diyanet Resmi Sitesini Çekme Denemeleri
+  const fetchEndpoints = [
+    targetUrl,
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`,
+    `https://corsproxy.io/?url=${encodeURIComponent(targetUrl)}`
+  ];
+
+  for (const endpoint of fetchEndpoints) {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 4500);
+      const res = await fetch(endpoint, { signal: controller.signal });
+      clearTimeout(timeoutId);
+      if (res.ok) {
+        const text = await res.text();
+        const parsed = parseDiyanetHtml(text);
+        if (parsed) {
+          return parsed;
+        }
+      }
+    } catch (err) {
+      // Bir sonraki alternatife geç
+    }
+  }
+
+  // 2. Yedek Diyanet API'si (Aladhan Diyanet Turkey Method 13)
   try {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 4000);
@@ -87,23 +200,26 @@ export async function fetchOnlineDiyanetTimes(cityName) {
       signal: controller.signal
     });
     clearTimeout(timeoutId);
-    if (!res.ok) return null;
-    const json = await res.json();
-    if (json && json.data && json.data.timings) {
-      const t = json.data.timings;
-      return {
-        fajr: t.Fajr,
-        sunrise: t.Sunrise,
-        dhuhr: t.Dhuhr,
-        asr: t.Asr,
-        maghrib: t.Maghrib,
-        isha: t.Isha
-      };
+    if (res.ok) {
+      const json = await res.json();
+      if (json && json.data && json.data.timings) {
+        const t = json.data.timings;
+        return {
+          source: 'aladhan-diyanet-method',
+          fajr: t.Fajr,
+          sunrise: t.Sunrise,
+          dhuhr: t.Dhuhr,
+          asr: t.Asr,
+          maghrib: t.Maghrib,
+          isha: t.Isha,
+          hijri: json.data.date?.hijri ? `${json.data.date.hijri.day} ${json.data.date.hijri.month?.tr || json.data.date.hijri.month?.en} ${json.data.date.hijri.year}` : null,
+          qiblaAngle: 147
+        };
+      }
     }
-    return null;
-  } catch (e) {
-    return null;
-  }
+  } catch (e) {}
+
+  return null;
 }
 
 /**
